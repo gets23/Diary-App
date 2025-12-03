@@ -1,0 +1,228 @@
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../controllers/book_controller.dart';
+import '../../services/notification_service.dart';
+import '../../utils/constants.dart';
+
+class AddBookView extends StatefulWidget {
+  const AddBookView({super.key});
+  @override
+  State<AddBookView> createState() => _AddBookViewState();
+}
+
+class _AddBookViewState extends State<AddBookView> {
+  final _searchCtl = TextEditingController();
+  final _bookController = BookController();
+  final _notifService = NotificationService();
+  
+  List<dynamic> _results = [];
+  bool _isLoading = false;
+  String? _username;
+  
+  // FITUR: Filter Chips
+  final List<String> _filters = ['Judul', 'Penulis', 'ISBN', 'Genre'];
+  String _selectedFilter = 'Judul';
+
+  // FITUR: Tampilan Awal (Trending/Random)
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((p) => setState(() => _username = p.getString('loggedInUser')));
+    _loadTrending(); // Load random books saat start
+  }
+
+  Future<void> _loadTrending() async {
+    setState(() => _isLoading = true);
+    try {
+      final data = await _bookController.getTrendingBooks();
+      if (mounted) setState(() => _results = data);
+    } catch (_) {}
+    if (mounted) setState(() => _isLoading = false);
+  }
+
+  Future<void> _search() async {
+    if (_searchCtl.text.isEmpty) {
+      _loadTrending(); // Kalau kosong balik ke trending
+      return;
+    }
+    
+    setState(() { _isLoading = true; _results = []; });
+    try {
+      // Mapping filter UI ke API parameter
+      String type = 'general';
+      if (_selectedFilter == 'Judul') type = 'judul';
+      else if (_selectedFilter == 'Penulis') type = 'penulis';
+      else if (_selectedFilter == 'ISBN') type = 'isbn';
+      else if (_selectedFilter == 'Genre') type = 'genre';
+
+      final res = await _bookController.searchBooksFromApi(_searchCtl.text, filterType: type);
+      setState(() => _results = res);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gagal mencari buku."), backgroundColor: errorRed));
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // FITUR: Bottom Sheet Detail
+  void _showBookDetailSheet(dynamic book) {
+    final info = book['volumeInfo'];
+    final title = info['title'] ?? 'Tanpa Judul';
+    final desc = info['description'] ?? 'Tidak ada sinopsis.';
+    final authors = (info['authors'] as List?)?.join(', ') ?? 'N/A';
+    final img = info['imageLinks']?['thumbnail'] ?? '';
+    final genre = (info['categories'] as List?)?.first ?? 'Umum';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true, // Supaya bisa full height
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (_, scrollController) => Padding(
+          padding: const EdgeInsets.all(24),
+          child: ListView(
+            controller: scrollController,
+            children: [
+              Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)))),
+              const SizedBox(height: 20),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(borderRadius: BorderRadius.circular(8), child: img.isNotEmpty ? Image.network(img, width: 100, fit: BoxFit.cover) : const Icon(Icons.book, size: 100, color: Colors.grey)),
+                  const SizedBox(width: 16),
+                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Chip(label: Text(genre, style: const TextStyle(fontSize: 10, color: Colors.white)), backgroundColor: primaryPurple, padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+                    Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    Text(authors, style: const TextStyle(color: textSecondary)),
+                  ]))
+                ],
+              ),
+              const SizedBox(height: 24),
+              const Text("Sinopsis", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 8),
+              Text(desc, style: const TextStyle(color: textSecondary, height: 1.5), textAlign: TextAlign.justify),
+              const SizedBox(height: 30),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: accentGreen, padding: const EdgeInsets.symmetric(vertical: 16)),
+                  onPressed: () {
+                    _save(book);
+                    Navigator.pop(context); // Tutup sheet
+                  },
+                  child: const Text("TAMBAH KE KOLEKSI", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _save(dynamic bookData) async {
+    if (_username == null) return;
+    final err = await _bookController.saveBook(bookData, _username!);
+    if (err == null) {
+      final title = bookData['volumeInfo']['title'];
+      await _notifService.requestPermissions();
+      await _notifService.scheduleNotificationNow(title: "Buku Baru!", body: "Yuk baca $title", notificationId: 3);
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Berhasil disimpan!"), backgroundColor: accentGreen));
+    } else {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err), backgroundColor: accentYellow));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Cari Buku"), automaticallyImplyLeading: false),
+      body: Column(
+        children: [
+          // Search & Filter
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            color: scaffoldBg,
+            child: Column(
+              children: [
+                TextField(
+                  controller: _searchCtl,
+                  decoration: InputDecoration(
+                    hintText: "Cari...",
+                    prefixIcon: const Icon(Icons.search),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    suffixIcon: IconButton(onPressed: _search, icon: const Icon(Icons.arrow_forward_rounded, color: primaryPurple)),
+                  ),
+                  onSubmitted: (_) => _search(),
+                ),
+                const SizedBox(height: 12),
+                // FITUR: Filter Chips
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: _filters.map((f) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(f),
+                        selected: _selectedFilter == f,
+                        selectedColor: primaryPurple.withOpacity(0.2),
+                        labelStyle: TextStyle(color: _selectedFilter == f ? primaryPurple : textSecondary),
+                        onSelected: (val) { if(val) setState(() => _selectedFilter = f); },
+                      ),
+                    )).toList(),
+                  ),
+                )
+              ],
+            ),
+          ),
+
+          // List Hasil
+          if (_isLoading) const Expanded(child: Center(child: CircularProgressIndicator()))
+          else if (_results.isEmpty) const Expanded(child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.search_off, size: 60, color: Colors.grey), SizedBox(height: 10), Text("Tidak ada hasil.")])))
+          else Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+              itemCount: _results.length,
+              itemBuilder: (context, index) {
+                final book = _results[index];
+                final info = book['volumeInfo'];
+                final genre = (info['categories'] as List?)?.first ?? 'Umum';
+                final img = info['imageLinks']?['thumbnail'] ?? '';
+
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => _showBookDetailSheet(book), // FITUR: Overlay Detail
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(children: [
+                        ClipRRect(borderRadius: BorderRadius.circular(8), child: img.isNotEmpty ? Image.network(img, width: 60, height: 90, fit: BoxFit.cover) : Container(width: 60, height: 90, color: Colors.grey[300], child: const Icon(Icons.book))),
+                        const SizedBox(width: 16),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: accentYellow.withOpacity(0.2), borderRadius: BorderRadius.circular(4)), child: Text(genre, style: const TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.bold))),
+                          const SizedBox(height: 4),
+                          Text(info['title'] ?? 'Tanpa Judul', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                          Text((info['authors'] as List?)?.join(', ') ?? '-', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: textSecondary, fontSize: 12)),
+                        ])),
+                        const Icon(Icons.add_circle_outline, color: primaryPurple)
+                      ]),
+                    ),
+                  ),
+                );
+              },
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}
