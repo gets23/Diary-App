@@ -1,9 +1,8 @@
 import 'dart:convert';
-import 'dart:math';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
 import '../models/book_model.dart';
-import '../utils/constants.dart';
+import '../utils/constants.dart'; // Pastikan GOOGLE_BOOKS_API_KEY ada di sini
 
 class BookController {
   final Box _bookBox = Hive.box('bookBox');
@@ -11,33 +10,39 @@ class BookController {
 
   // --- 1. PENCARIAN CANGGIH (Filter Judul, Penulis, dll) ---
   Future<List<dynamic>> searchBooksFromApi(String query, {String filterType = 'general'}) async {
-    String q = query;
-    // Google Books API Filters
+    if (query.trim().isEmpty) return [];
+
+    // Construct Query sesuai Filter
+    String q = query.trim();
     if (filterType == 'judul') q = 'intitle:$query';
     else if (filterType == 'penulis') q = 'inauthor:$query';
     else if (filterType == 'isbn') q = 'isbn:$query';
     else if (filterType == 'genre') q = 'subject:$query';
 
     try {
-      final url = Uri.parse('https://www.googleapis.com/books/v1/volumes?q=$q&key=$GOOGLE_BOOKS_API_KEY&maxResults=20');
+      // Menggunakan replaceAll untuk spasi agar URL valid
+      final encodedQuery = q.replaceAll(' ', '+'); 
+      final url = Uri.parse('https://www.googleapis.com/books/v1/volumes?q=$encodedQuery&key=$GOOGLE_BOOKS_API_KEY&maxResults=20&printType=books');
+      
       final response = await http.get(url);
       
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         return data['items'] ?? [];
       }
-      throw Exception("Gagal mengambil data buku.");
+      return []; // Return kosong jika gagal, jangan throw error biar UI gak crash
     } catch (e) {
-      throw Exception("Pastikan perangkat terhubung ke internet.");
+      // Silent error, kembalikan list kosong agar UI menampilkan placeholder "Tidak ditemukan"
+      return [];
     }
   }
 
   // --- 2. FITUR REKOMENDASI & TRENDING ---
-  // Jika belum cari apa-apa, tampilkan ini
+  
+  // Default: Buku Fiksi Terbaru
   Future<List<dynamic>> getTrendingBooks() async {
-    // Kita ambil buku-buku 'Fiction' terbaru sebagai default trending
     try {
-      final url = Uri.parse('https://www.googleapis.com/books/v1/volumes?q=subject:fiction&orderBy=newest&key=$GOOGLE_BOOKS_API_KEY&maxResults=10');
+      final url = Uri.parse('https://www.googleapis.com/books/v1/volumes?q=subject:fiction&orderBy=newest&key=$GOOGLE_BOOKS_API_KEY&maxResults=10&printType=books');
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -49,48 +54,64 @@ class BookController {
     }
   }
 
-  // Rekomendasi berdasarkan genre yang sering disimpan user
+  // Rekomendasi Personal
   Future<List<dynamic>> getRecommendations(String username) async {
     final userBooks = getUserBooks(username);
+    
+    // 1. Jika User Belum Punya Buku -> Tampilkan Trending
     if (userBooks.isEmpty) return getTrendingBooks();
 
-    // Hitung genre terbanyak
+    // 2. Analisis Genre Terbanyak
     Map<String, int> genreCounts = {};
     for (var book in userBooks) {
-      // Bersihkan string genre agar akurat
-      String genre = book.category.split(' / ').first.trim(); 
-      if (genre == 'N/A' || genre.isEmpty) continue;
+      // Parsing: Ambil kata pertama dari "Fiction / Fantasy / Epic" -> "Fiction"
+      String genre = book.category.split(' / ').first.trim();
+      
+      // Filter genre sampah/terlalu umum
+      if (['N/A', 'General', 'Umum', ''].contains(genre)) continue;
+      
       genreCounts[genre] = (genreCounts[genre] ?? 0) + 1;
     }
 
+    // Jika setelah difilter tidak ada genre valid, kembali ke Trending
     if (genreCounts.isEmpty) return getTrendingBooks();
 
-    // Ambil top genre
+    // 3. Ambil Top Genre
     String topGenre = genreCounts.entries.reduce((a, b) => a.value > b.value ? a : b).key;
     
-    // Fetch API berdasarkan top genre
+    // 4. Fetch API berdasarkan Top Genre
     try {
-      final url = Uri.parse('https://www.googleapis.com/books/v1/volumes?q=subject:$topGenre&key=$GOOGLE_BOOKS_API_KEY&maxResults=5');
+      final url = Uri.parse('https://www.googleapis.com/books/v1/volumes?q=subject:$topGenre&orderBy=relevance&key=$GOOGLE_BOOKS_API_KEY&maxResults=10&printType=books');
       final response = await http.get(url);
+      
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        return data['items'] ?? [];
+        List<dynamic> items = data['items'] ?? [];
+        
+        // Filter agar buku yang SUDAH ADA di library tidak muncul lagi di rekomendasi
+        final myBookIds = userBooks.map((b) => b.id).toSet();
+        items.removeWhere((item) => myBookIds.contains(item['id']));
+        
+        return items;
       }
     } catch (_) {}
     
-    return [];
+    // Fallback terakhir
+    return getTrendingBooks();
   }
 
   // --- 3. CRUD BUKU ---
+  
   Future<String?> saveBook(Map<String, dynamic> apiData, String username) async {
     final String id = apiData['id'];
     final String hiveKey = "${username}_$id";
 
+    // Cek Duplikasi
     if (_bookBox.containsKey(hiveKey)) return "Buku ini sudah ada di koleksimu.";
 
     final vol = apiData['volumeInfo'];
     
-    // Parsing Harga (Google Books kadang kasih, kadang tidak)
+    // Parsing Harga (Robust)
     double price = 0.0;
     String currency = 'IDR';
     if (apiData['saleInfo'] != null && apiData['saleInfo']['listPrice'] != null) {
@@ -101,14 +122,14 @@ class BookController {
     final book = Book(
       id: id,
       title: vol['title'] ?? 'Tanpa Judul',
-      authors: (vol['authors'] as List?)?.join(', ') ?? 'N/A',
+      authors: (vol['authors'] as List?)?.join(', ') ?? 'Penulis Tidak Diketahui',
       coverUrl: vol['imageLinks']?['thumbnail'] ?? '',
       pageCount: vol['pageCount'] ?? 0,
       description: vol['description'] ?? 'Tidak ada deskripsi.',
       category: (vol['categories'] as List?)?.first ?? 'Umum',
       currentPage: 0,
-      status: 'To Read',
-      price: price, // Harga otomatis jika ada
+      status: 'To Read', // Default Status
+      price: price,
       currency: currency,
       review: '',
       rating: 0,
@@ -116,23 +137,23 @@ class BookController {
     );
 
     await _bookBox.put(hiveKey, book.toMap());
-    return null;
+    return null; // Null berarti sukses (tidak ada error message)
   }
 
-  // Get Books dengan Filter Lokal (Genre & Status)
+  // Get Books dengan Filter Lokal
   List<Book> getUserBooks(String username, {String? filterGenre, String? filterStatus}) {
     var books = _bookBox.values
         .map((e) => Book.fromMap(Map<dynamic, dynamic>.from(e as Map)))
         .where((b) => b.username == username);
 
+    // Filter Genre
     if (filterGenre != null && filterGenre != 'Semua') {
+      // Matches partial string, e.g. "Fiction" matches "Fiction / Fantasy"
       books = books.where((b) => b.category.contains(filterGenre));
     }
     
+    // Filter Status
     if (filterStatus != null && filterStatus != 'Semua') {
-      // Mapping status UI ke status Model
-      // UI: 'Selesai', 'Sedang Baca', 'Belum Baca'
-      // Model: 'Finished', 'Reading Now', 'To Read'
       String target = '';
       if (filterStatus == 'Selesai') target = 'Finished';
       else if (filterStatus == 'Sedang Baca') target = 'Reading Now';
@@ -141,7 +162,7 @@ class BookController {
       if (target.isNotEmpty) books = books.where((b) => b.status == target);
     }
 
-    return books.toList().reversed.toList(); // Terbaru di atas
+    return books.toList().reversed.toList(); // Urutkan dari yang baru ditambahkan
   }
 
   Book? getBook(String hiveKey) {
@@ -159,19 +180,18 @@ class BookController {
       await _bookBox.put(hiveKey, bookMap);
     }
   }
-  
-  // Update Manual Harga/Status dari Detail Page
-  Future<void> updateBookDetails(String hiveKey, Book updatedBook) async {
-    await _bookBox.put(hiveKey, updatedBook.toMap());
-  }
 
   Future<void> deleteBook(String hiveKey, String bookId, String username) async {
     await _bookBox.delete(hiveKey);
-    // Hapus Log
+    
+    // Hapus Log Terkait (Clean Up)
     final keysToDelete = _logBox.keys.where((k) {
       final l = Map<String, dynamic>.from(_logBox.get(k) as Map);
       return l['bookId'] == bookId && l['username'] == username;
     }).toList();
-    await _logBox.deleteAll(keysToDelete);
+    
+    for(var k in keysToDelete) {
+      await _logBox.delete(k);
+    }
   }
 }

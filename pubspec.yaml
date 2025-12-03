@@ -23,7 +23,9 @@ dependencies:
   crypto: ^3.0.3
   flutter_local_notifications: ^17.1.2  
   timezone: ^0.9.3  
-  image_picker: ^1.0.7                    
+  image_picker: ^1.0.7
+  path_provider: ^2.1.5
+  path: ^1.9.1                    
 
 dev_dependencies:
   flutter_test:
