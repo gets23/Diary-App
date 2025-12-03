@@ -13,22 +13,22 @@ class AddBookView extends StatefulWidget {
 class _AddBookViewState extends State<AddBookView> {
   final _searchCtl = TextEditingController();
   final _bookController = BookController();
-  final _notifService = NotificationService();
+  final _notifService = NotificationService(); 
   
   List<dynamic> _results = [];
   bool _isLoading = false;
   String? _username;
   
-  // FITUR: Filter Chips
+  // Filter Chips
   final List<String> _filters = ['Judul', 'Penulis', 'ISBN', 'Genre'];
   String _selectedFilter = 'Judul';
 
-  // FITUR: Tampilan Awal (Trending/Random)
   @override
   void initState() {
     super.initState();
     SharedPreferences.getInstance().then((p) => setState(() => _username = p.getString('loggedInUser')));
-    _loadTrending(); // Load random books saat start
+    _notifService.init(); 
+    _loadTrending(); 
   }
 
   Future<void> _loadTrending() async {
@@ -36,19 +36,20 @@ class _AddBookViewState extends State<AddBookView> {
     try {
       final data = await _bookController.getTrendingBooks();
       if (mounted) setState(() => _results = data);
-    } catch (_) {}
-    if (mounted) setState(() => _isLoading = false);
+    } catch (_) {} 
+    finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _search() async {
-    if (_searchCtl.text.isEmpty) {
-      _loadTrending(); // Kalau kosong balik ke trending
+    FocusScope.of(context).unfocus();
+    if (_searchCtl.text.trim().isEmpty) {
+      _loadTrending();
       return;
     }
-    
     setState(() { _isLoading = true; _results = []; });
     try {
-      // Mapping filter UI ke API parameter
       String type = 'general';
       if (_selectedFilter == 'Judul') type = 'judul';
       else if (_selectedFilter == 'Penulis') type = 'penulis';
@@ -56,47 +57,45 @@ class _AddBookViewState extends State<AddBookView> {
       else if (_selectedFilter == 'Genre') type = 'genre';
 
       final res = await _bookController.searchBooksFromApi(_searchCtl.text, filterType: type);
-      setState(() => _results = res);
+      if (mounted) setState(() => _results = res);
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gagal mencari buku."), backgroundColor: errorRed));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gagal mencari buku."), backgroundColor: errorRed));
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // FITUR: Bottom Sheet Detail
   void _showBookDetailSheet(dynamic book) {
     final info = book['volumeInfo'];
     final title = info['title'] ?? 'Tanpa Judul';
     final desc = info['description'] ?? 'Tidak ada sinopsis.';
-    final authors = (info['authors'] as List?)?.join(', ') ?? 'N/A';
+    final authors = (info['authors'] as List?)?.join(', ') ?? 'Penulis Tidak Diketahui';
     final img = info['imageLinks']?['thumbnail'] ?? '';
     final genre = (info['categories'] as List?)?.first ?? 'Umum';
 
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true, // Supaya bisa full height
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent, 
       builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.4,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (_, scrollController) => Padding(
+        initialChildSize: 0.65, minChildSize: 0.4, maxChildSize: 0.95,
+        builder: (_, scrollController) => Container(
+          decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
           padding: const EdgeInsets.all(24),
           child: ListView(
             controller: scrollController,
             children: [
               Center(child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)))),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  ClipRRect(borderRadius: BorderRadius.circular(8), child: img.isNotEmpty ? Image.network(img, width: 100, fit: BoxFit.cover) : const Icon(Icons.book, size: 100, color: Colors.grey)),
+                  ClipRRect(borderRadius: BorderRadius.circular(8), child: img.isNotEmpty ? Image.network(img, width: 100, height: 150, fit: BoxFit.cover) : Container(width: 100, height: 150, color: Colors.grey[300], child: const Icon(Icons.book, size: 40))),
                   const SizedBox(width: 16),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Chip(label: Text(genre, style: const TextStyle(fontSize: 10, color: Colors.white)), backgroundColor: primaryPurple, padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
-                    Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    Text(genre, style: const TextStyle(fontSize: 10, color: primaryPurple, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 4),
                     Text(authors, style: const TextStyle(color: textSecondary)),
                   ]))
@@ -105,20 +104,17 @@ class _AddBookViewState extends State<AddBookView> {
               const SizedBox(height: 24),
               const Text("Sinopsis", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               const SizedBox(height: 8),
-              Text(desc, style: const TextStyle(color: textSecondary, height: 1.5), textAlign: TextAlign.justify),
+              Text(desc, style: const TextStyle(color: textPrimary, height: 1.6), textAlign: TextAlign.justify),
               const SizedBox(height: 30),
               SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
+                child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(backgroundColor: accentGreen, padding: const EdgeInsets.symmetric(vertical: 16)),
-                  onPressed: () {
-                    _save(book);
-                    Navigator.pop(context); // Tutup sheet
-                  },
-                  child: const Text("TAMBAH KE KOLEKSI", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  onPressed: () { Navigator.pop(context); _save(book); },
+                  icon: const Icon(Icons.bookmark_add),
+                  label: const Text("TAMBAH KE KOLEKSI", style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ),
-              const SizedBox(height: 20),
             ],
           ),
         ),
@@ -128,12 +124,27 @@ class _AddBookViewState extends State<AddBookView> {
 
   Future<void> _save(dynamic bookData) async {
     if (_username == null) return;
+    
     final err = await _bookController.saveBook(bookData, _username!);
+    
     if (err == null) {
       final title = bookData['volumeInfo']['title'];
-      await _notifService.requestPermissions();
-      await _notifService.scheduleNotificationNow(title: "Buku Baru!", body: "Yuk baca $title", notificationId: 3);
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Berhasil disimpan!"), backgroundColor: accentGreen));
+      
+      // 1. SnackBar DULUAN (Instant Feedback)
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Berhasil masuk koleksi!"), backgroundColor: accentGreen));
+
+      // 2. Trigger Notifikasi (Dengan Delay 3 Detik)
+      try {
+        await _notifService.requestPermissions(); 
+        // Jangan pakai await di sini biar UI thread gak kaku nungguin 3 detik
+        _notifService.showNotificationNow(
+          title: "Buku Ditambahkan", 
+          body: "Buku '$title' masuk koleksi. Selamat membaca!", 
+          notificationId: DateTime.now().millisecond,
+          delaySeconds: 3 // Nah ini dia request-nya!
+        );
+      } catch (_) {} 
+
     } else {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err), backgroundColor: accentYellow));
     }
@@ -142,10 +153,9 @@ class _AddBookViewState extends State<AddBookView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Cari Buku"), automaticallyImplyLeading: false),
+      appBar: AppBar(title: const Text("Cari Buku"), automaticallyImplyLeading: false, elevation: 0),
       body: Column(
         children: [
-          // Search & Filter
           Container(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             color: scaffoldBg,
@@ -153,8 +163,9 @@ class _AddBookViewState extends State<AddBookView> {
               children: [
                 TextField(
                   controller: _searchCtl,
+                  textInputAction: TextInputAction.search,
                   decoration: InputDecoration(
-                    hintText: "Cari...",
+                    hintText: "Cari judul, penulis, ISBN...",
                     prefixIcon: const Icon(Icons.search),
                     filled: true,
                     fillColor: Colors.white,
@@ -164,18 +175,18 @@ class _AddBookViewState extends State<AddBookView> {
                   onSubmitted: (_) => _search(),
                 ),
                 const SizedBox(height: 12),
-                // FITUR: Filter Chips
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: _filters.map((f) => Padding(
                       padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
+                      child: FilterChip(
                         label: Text(f),
                         selected: _selectedFilter == f,
                         selectedColor: primaryPurple.withOpacity(0.2),
-                        labelStyle: TextStyle(color: _selectedFilter == f ? primaryPurple : textSecondary),
-                        onSelected: (val) { if(val) setState(() => _selectedFilter = f); },
+                        checkmarkColor: primaryPurple,
+                        backgroundColor: Colors.white,
+                        onSelected: (val) { if(val) { setState(() => _selectedFilter = f); if (_searchCtl.text.isNotEmpty) _search(); } },
                       ),
                     )).toList(),
                   ),
@@ -183,44 +194,61 @@ class _AddBookViewState extends State<AddBookView> {
               ],
             ),
           ),
-
-          // List Hasil
           if (_isLoading) const Expanded(child: Center(child: CircularProgressIndicator()))
-          else if (_results.isEmpty) const Expanded(child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.search_off, size: 60, color: Colors.grey), SizedBox(height: 10), Text("Tidak ada hasil.")])))
+          else if (_results.isEmpty) const Expanded(child: Center(child: Text("Tidak ada hasil.", style: TextStyle(color: textSecondary))))
           else Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-              itemCount: _results.length,
-              itemBuilder: (context, index) {
-                final book = _results[index];
-                final info = book['volumeInfo'];
-                final genre = (info['categories'] as List?)?.first ?? 'Umum';
-                final img = info['imageLinks']?['thumbnail'] ?? '';
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                itemCount: _results.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (context, index) {
+                  final book = _results[index];
+                  final info = book['volumeInfo'];
+                  final title = info['title'] ?? 'Tanpa Judul';
+                  final author = (info['authors'] as List?)?.join(', ') ?? '-';
+                  final genre = (info['categories'] as List?)?.first ?? 'Umum';
+                  final img = info['imageLinks']?['thumbnail'] ?? '';
 
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    onTap: () => _showBookDetailSheet(book), // FITUR: Overlay Detail
+                  return Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: Colors.grey.shade200)),
                     child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Row(children: [
-                        ClipRRect(borderRadius: BorderRadius.circular(8), child: img.isNotEmpty ? Image.network(img, width: 60, height: 90, fit: BoxFit.cover) : Container(width: 60, height: 90, color: Colors.grey[300], child: const Icon(Icons.book))),
-                        const SizedBox(width: 16),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Container(padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: accentYellow.withOpacity(0.2), borderRadius: BorderRadius.circular(4)), child: Text(genre, style: const TextStyle(fontSize: 10, color: Colors.orange, fontWeight: FontWeight.bold))),
-                          const SizedBox(height: 4),
-                          Text(info['title'] ?? 'Tanpa Judul', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                          Text((info['authors'] as List?)?.join(', ') ?? '-', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: textSecondary, fontSize: 12)),
-                        ])),
-                        const Icon(Icons.add_circle_outline, color: primaryPurple)
-                      ]),
+                      padding: const EdgeInsets.all(4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(8),
+                              onTap: () => _showBookDetailSheet(book),
+                              child: Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Row(children: [
+                                  ClipRRect(borderRadius: BorderRadius.circular(8), child: img.isNotEmpty ? Image.network(img, width: 60, height: 90, fit: BoxFit.cover) : Container(width: 60, height: 90, color: Colors.grey[300], child: const Icon(Icons.book))),
+                                  const SizedBox(width: 16),
+                                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                    Text(genre.toUpperCase(), style: const TextStyle(fontSize: 10, color: accentYellow, fontWeight: FontWeight.bold)),
+                                    const SizedBox(height: 4),
+                                    Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                    const SizedBox(height: 4),
+                                    Text(author, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: textSecondary, fontSize: 12)),
+                                  ])),
+                                ]),
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.add_circle_outline_rounded, color: primaryPurple, size: 28),
+                            tooltip: "Tambah ke Koleksi",
+                            onPressed: () => _save(book),
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              },
-            ),
-          )
+                  );
+                },
+              ),
+            )
         ],
       ),
     );

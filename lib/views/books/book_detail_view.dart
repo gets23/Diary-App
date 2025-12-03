@@ -3,11 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../controllers/book_controller.dart';
 import '../../controllers/log_controller.dart';
 import '../../controllers/gamification_controller.dart';
 import '../../utils/constants.dart';
-import '../../models/log_model.dart'; // Import Model Log
+import '../../models/log_model.dart';
 import '../logs/log_entry_view.dart';
 
 class BookDetailView extends StatefulWidget {
@@ -34,7 +35,7 @@ class _BookDetailViewState extends State<BookDetailView> {
     SharedPreferences.getInstance().then((p) => setState(() => _username = p.getString('loggedInUser')));
   }
 
-  // --- LOGIC UI ---
+  // --- LOGIC HELPER ---
   
   String _formatPrice(double price) {
     double finalPrice = price;
@@ -46,9 +47,10 @@ class _BookDetailViewState extends State<BookDetailView> {
 
   String _formatLogDate(DateTime dt) {
     final localized = dt.add(Duration(hours: _timeOffset[_selectedZone]!));
-    // Format: Senin, 10 Okt 2025 • 14:30
     return "${DateFormat('EEEE, dd MMM yyyy • HH:mm', 'id_ID').format(localized)} ($_selectedZone)";
   }
+
+  // --- ACTIONS ---
 
   Future<void> _deleteBook(String bookId) async {
     showDialog(context: context, builder: (c) => AlertDialog(
@@ -72,6 +74,29 @@ class _BookDetailViewState extends State<BookDetailView> {
     ));
   }
 
+  // Fitur Baru: Konfirmasi Hapus Log
+  Future<void> _confirmDeleteLog(String logId) async {
+    showDialog(context: context, builder: (c) => AlertDialog(
+      title: const Text("Hapus Log?"),
+      content: const Text("Catatan progres ini akan dihapus permanen."),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(c), child: const Text("Batal")),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: errorRed),
+          onPressed: () async {
+            // Panggil deleteLog dengan parameter baru (ID & HiveKeyBuku)
+            await _logController.deleteLog(logId, widget.hiveKey);
+            if(mounted) {
+              Navigator.pop(c); 
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Log dihapus"), backgroundColor: accentGreen));
+            }
+          }, 
+          child: const Text("Hapus")
+        )
+      ],
+    ));
+  }
+
   Future<void> _review(int r, String rev) async {
     int rating = r == 0 ? 0 : r;
     final ctl = TextEditingController(text: rev);
@@ -89,7 +114,7 @@ class _BookDetailViewState extends State<BookDetailView> {
         ElevatedButton(onPressed: () async {
           await _bookController.updateReview(widget.hiveKey, rating, ctl.text);
           if (rev.isEmpty && ctl.text.isNotEmpty && _username != null) {
-             await _gameController.addXp(_username!, 50); // XP Review
+             await _gameController.addXp(_username!, 50); 
           }
           if(mounted) { Navigator.pop(c); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Disimpan!"), backgroundColor: accentGreen)); }
         }, child: const Text("Simpan"))
@@ -117,7 +142,7 @@ class _BookDetailViewState extends State<BookDetailView> {
             FloatingActionButton.extended(heroTag: '2', backgroundColor: accentYellow, label: const Text("Catat Log"), icon: const Icon(Icons.edit_note), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => LogEntryView(hiveKey: widget.hiveKey)))),
           ]),
           body: ListView(padding: const EdgeInsets.fromLTRB(16, 16, 16, 100), children: [
-            // Header
+            // Header Buku
             Row(children: [
               Hero(tag: book.id, child: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(book.coverUrl, width: 90, height: 130, fit: BoxFit.cover, errorBuilder: (_,__,___)=>Container(width: 90, height: 130, color: Colors.grey)))), 
               const SizedBox(width: 16),
@@ -138,7 +163,7 @@ class _BookDetailViewState extends State<BookDetailView> {
               DropdownButton<String>(value: _selectedCurrency, items: ['IDR', 'USD', 'EUR'].map((e)=>DropdownMenuItem(value: e, child: Text(e))).toList(), onChanged: (v)=>setState(()=>_selectedCurrency=v!), underline: Container())
             ]))),
             
-            // Sinopsis Dropdown
+            // Sinopsis
             Card(child: ExpansionTile(title: const Text("Sinopsis", style: TextStyle(fontWeight: FontWeight.bold)), children: [Padding(padding: const EdgeInsets.all(16), child: Text(book.description.isNotEmpty ? book.description : "Tidak ada deskripsi", textAlign: TextAlign.justify))])),
             
             // Review User
@@ -150,31 +175,65 @@ class _BookDetailViewState extends State<BookDetailView> {
               DropdownButton<String>(value: _selectedZone, items: _timeOffset.keys.map((k)=>DropdownMenuItem(value: k, child: Text(k))).toList(), onChanged: (v)=>setState(()=>_selectedZone=v!), underline: Container(), icon: const Icon(Icons.access_time))
             ]),
             
-            // List Log
+            // --- LIST LOG (UPDATED) ---
             ValueListenableBuilder(
               valueListenable: Hive.box('logBox').listenable(),
               builder: (ctx, _, __) {
+                // Mengambil logs (Controller sudah handle sort & filter)
                 final logsData = _logController.getLogsWithKeys(book.id, book.username!);
-                if (logsData.isEmpty) return const Padding(padding: EdgeInsets.all(20), child: Center(child: Text("Belum ada log.", style: TextStyle(color: Colors.grey))));
+                
+                if (logsData.isEmpty) return const Padding(padding: EdgeInsets.all(20), child: Center(child: Text("Belum ada log. Yuk baca!", style: TextStyle(color: Colors.grey))));
                 
                 return Column(children: logsData.map((item) {
                   final log = item['log'] as ReadingLog;
-                  final key = item['key'] as int;
+                  // final key = item['key'] as int; // Key tidak dipakai lagi untuk delete, tapi bisa disimpan kalau perlu
                   
                   return Card(
+                    clipBehavior: Clip.antiAlias, // Biar ripple effect rapi
                     margin: const EdgeInsets.only(bottom: 12),
-                    child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                        Text(log.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                        IconButton(icon: const Icon(Icons.delete_outline, size: 18), onPressed: () => _logController.deleteLog(key))
-                      ]),
-                      Text(_formatLogDate(log.createdAt), style: const TextStyle(fontSize: 11, color: primaryPurple)),
-                      const Divider(),
-                      if (log.imagePath != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: Image.file(File(log.imagePath!), height: 100, width: double.infinity, fit: BoxFit.cover, errorBuilder: (_,__,___)=>const SizedBox())),
-                      Text("Halaman ${log.pageLogged}", style: const TextStyle(fontWeight: FontWeight.bold, color: textPrimary)),
-                      if (log.notes.isNotEmpty) Text(log.notes, style: const TextStyle(color: textSecondary)),
-                      if (log.address != null) Row(children: [const Icon(Icons.location_on, size: 12, color: textSecondary), Text(log.address!, style: const TextStyle(fontSize: 11, color: textSecondary))])
-                    ])),
+                    child: InkWell(
+                      // --- AKSI KLIK: Buka Detail/Edit Log ---
+                      onTap: () {
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => LogEntryView(
+                          hiveKey: widget.hiveKey,
+                          existingLog: log, // Kirim data log untuk diedit
+                        )));
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(12), 
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                            Text(log.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                            // --- AKSI HAPUS: Pakai ID dan Dialog Konfirmasi ---
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 18, color: Colors.grey), 
+                              onPressed: () => _confirmDeleteLog(log.id)
+                            )
+                          ]),
+                          Text(_formatLogDate(log.createdAt), style: const TextStyle(fontSize: 11, color: primaryPurple)),
+                          const Divider(),
+                          if (log.imagePath != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: Image.file(File(log.imagePath!), height: 100, width: double.infinity, fit: BoxFit.cover, errorBuilder: (_,__,___)=>const SizedBox())),
+                          Row(
+                            children: [
+                              Text("Halaman ${log.pageLogged}", style: const TextStyle(fontWeight: FontWeight.bold, color: textPrimary)),
+                              if (log.notes.isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                const Icon(Icons.sticky_note_2_outlined, size: 14, color: Colors.grey),
+                              ]
+                            ],
+                          ),
+                          if (log.notes.isNotEmpty) 
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(log.notes, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: textSecondary, fontSize: 12)),
+                            ),
+                          if (log.address != null) Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Row(children: [const Icon(Icons.location_on, size: 12, color: textSecondary), const SizedBox(width: 4), Expanded(child: Text(log.address!, style: const TextStyle(fontSize: 11, color: textSecondary), overflow: TextOverflow.ellipsis))]),
+                          )
+                        ])
+                      ),
+                    ),
                   );
                 }).toList());
               }

@@ -1,3 +1,4 @@
+import 'dart:io'; // Tambahkan ini untuk File Image
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -42,7 +43,6 @@ class _DashboardViewState extends State<DashboardView> {
       setState(() {
         _username = user;
         if (user != null) {
-          // Load rekomendasi berdasarkan user
           _recommendationFuture = _bookController.getRecommendations(user);
         }
       });
@@ -53,9 +53,92 @@ class _DashboardViewState extends State<DashboardView> {
     }
   }
 
+  // --- LOGIC: SIMPAN BUKU DARI REKOMENDASI ---
+  void _showBookDetailBottomSheet(Map<String, dynamic> bookData) {
+    // Parsing data dasar untuk display
+    final vol = bookData['volumeInfo'];
+    final title = vol['title'] ?? 'Tanpa Judul';
+    final author = (vol['authors'] as List?)?.join(', ') ?? 'Penulis Tidak Diketahui';
+    final desc = vol['description'] ?? 'Tidak ada deskripsi.';
+    final imgUrl = vol['imageLinks']?['thumbnail'] ?? '';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) {
+          return SingleChildScrollView(
+            controller: scrollController,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2))),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: imgUrl.isNotEmpty
+                          ? Image.network(imgUrl, width: 100, fit: BoxFit.cover)
+                          : Container(width: 100, height: 150, color: Colors.grey[300], child: const Icon(Icons.book)),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 4),
+                          Text(author, style: const TextStyle(color: textSecondary)),
+                          const SizedBox(height: 12),
+                          ElevatedButton.icon(
+                            onPressed: () async {
+                              if (_username != null) {
+                                // Panggil Controller untuk simpan
+                                final error = await _bookController.saveBook(bookData, _username!);
+                                if (mounted) {
+                                  Navigator.pop(ctx); // Tutup sheet
+                                  if (error == null) {
+                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Buku ditambahkan ke koleksi!"), backgroundColor: accentGreen));
+                                    // Refresh Dashboard/Collection logic if needed
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error), backgroundColor: accentYellow));
+                                  }
+                                }
+                              }
+                            },
+                            icon: const Icon(Icons.add),
+                            label: const Text("Simpan ke Koleksi"),
+                            style: ElevatedButton.styleFrom(backgroundColor: primaryPurple, foregroundColor: Colors.white),
+                          )
+                        ],
+                      ),
+                    )
+                  ],
+                ),
+                const SizedBox(height: 20),
+                const Text("Sinopsis", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                const SizedBox(height: 8),
+                Text(desc, style: const TextStyle(height: 1.5, color: textPrimary), textAlign: TextAlign.justify),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   // --- WIDGET HELPER: Achievement Terdekat ---
   Widget _buildNearestAchievement() {
-    // Ambil data achievement terdekat dari controller
     final achievement = _gameController.getNearestAchievement(_username!);
     final double progress = achievement['progress'] ?? 0.0;
     
@@ -111,7 +194,7 @@ class _DashboardViewState extends State<DashboardView> {
     if (books.isEmpty) return const SizedBox();
 
     return SizedBox(
-      height: 200,
+      height: 220, // Agak tinggiin dikit biar muat
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.only(left: 16),
@@ -121,20 +204,25 @@ class _DashboardViewState extends State<DashboardView> {
           String title, cover, hiveKey;
           
           if (isLocal) {
-            // Data dari Hive (Book Model)
             title = book.title;
             cover = book.coverUrl;
             hiveKey = "${_username}_${book.id}";
           } else {
-            // Data dari API (Map)
             final info = book['volumeInfo'];
             title = info['title'] ?? 'Judul';
             cover = info['imageLinks']?['thumbnail'] ?? '';
-            hiveKey = ""; // Tidak bisa diklik detail view kalau dari rekomendasi (harus add dulu)
+            hiveKey = ""; 
           }
 
           return GestureDetector(
-            onTap: isLocal ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => BookDetailView(hiveKey: hiveKey))) : null,
+            // Logic Klik: Jika Lokal -> Buka Detail, Jika API -> Buka BottomSheet
+            onTap: () {
+              if (isLocal) {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => BookDetailView(hiveKey: hiveKey)));
+              } else {
+                _showBookDetailBottomSheet(book);
+              }
+            },
             child: Container(
               width: 120,
               margin: const EdgeInsets.only(right: 12),
@@ -147,12 +235,12 @@ class _DashboardViewState extends State<DashboardView> {
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(12),
                       child: cover.isNotEmpty 
-                        ? Image.network(cover, height: 160, width: 120, fit: BoxFit.cover, errorBuilder: (_,__,___)=>Container(height: 160, color: Colors.grey[300], child: const Icon(Icons.broken_image)))
+                        ? Image.network(cover, height: 160, width: 120, fit: BoxFit.cover, errorBuilder: (_,__,___)=>Container(height: 160, width: 120, color: Colors.grey[300], child: const Icon(Icons.broken_image)))
                         : Container(height: 160, width: 120, color: Colors.grey[300], child: const Icon(Icons.book)),
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
@@ -171,7 +259,7 @@ class _DashboardViewState extends State<DashboardView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header & Greeting
+            // Header & Greeting (Sinkronisasi PFP)
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 60, 20, 20),
               child: Row(
@@ -184,8 +272,23 @@ class _DashboardViewState extends State<DashboardView> {
                       Text(_username!, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: textPrimary)),
                     ],
                   ),
-                  // Avatar Mini (Placeholder)
-                  const CircleAvatar(backgroundColor: primaryPurple, child: Icon(Icons.person, color: Colors.white)),
+                  // Avatar Sinkron dengan Hive ProfileBox
+                  ValueListenableBuilder(
+                    valueListenable: Hive.box('profileBox').listenable(),
+                    builder: (context, box, _) {
+                      final profile = _gameController.getProfile(_username!);
+                      return CircleAvatar(
+                        radius: 25,
+                        backgroundColor: primaryPurple,
+                        backgroundImage: profile.profilePicturePath != null 
+                            ? FileImage(File(profile.profilePicturePath!)) 
+                            : null,
+                        child: profile.profilePicturePath == null 
+                            ? const Icon(Icons.person, color: Colors.white) 
+                            : null,
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
@@ -241,7 +344,7 @@ class _DashboardViewState extends State<DashboardView> {
               },
             ),
 
-            // Achievement Terdekat (Listen ke Log & Book box)
+            // Achievement Terdekat
             ValueListenableBuilder(
               valueListenable: Hive.box('logBox').listenable(),
               builder: (context, _, __) {
@@ -299,7 +402,7 @@ class _DashboardViewState extends State<DashboardView> {
               },
             ),
 
-            const SizedBox(height: 100), // Padding Bawah
+            const SizedBox(height: 100), // Padding Bawah agar tidak tertutup nav bar
           ],
         ),
       ),
